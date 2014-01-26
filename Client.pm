@@ -4,9 +4,9 @@ use warnings;
 use Carp;
 
 use vars qw( $VERSION );
-$VERSION = '8.0.0';
+$VERSION = '9.0.14';
 
-use YAML::Syck ();
+use JSON::Any;
 use HTTP::Request::Common ( );
 use HTTP::Response;
 use HTTP::Status;
@@ -29,14 +29,20 @@ sub new
 		$self->{base} .= q{/};
 	}
 
+	if (! exists($self->{autologout})) {
+		$self->{autologout} = 1;
+	}
+
 	$self->{ua} = LWP::UserAgent->new(
 		agent                 => "CanIt::API::Client/$VERSION",
 		cookie_jar            => {}, # Want cookies
 		requests_redirectable => [ 'GET', 'HEAD', 'POST' ],
 	);
 
-	$self->{ua}->default_headers()->header('Accept', 'text/x-yaml');
+	$self->{ua}->default_headers()->header('Accept', 'application/json');
+	$self->{ua}->timeout(300);
 
+	$self->{logged_in} = 0;
 	return $self;
 }
 
@@ -72,6 +78,21 @@ sub get_last_result
 	return $self->{_last_result};
 }
 
+sub get_last_value
+{
+	my ($self) = @_;
+	my $res = $self->{_last_result};
+	return undef unless defined ($res);
+	return undef unless HTTP::Status::is_success($res->code);
+	my $ans;
+	if (lc($res->header('Content-Type') eq 'message/rfc822')) {
+		return { message => $res->content };
+	}
+
+	eval { $ans = JSON::Any->Load($res->content) };
+	return $ans;
+}
+
 sub get_last_error
 {
 	my ($self) = @_;
@@ -79,12 +100,11 @@ sub get_last_error
 		return undef;
 	}
 
-	# If last result returned YAML and has an
+	# If last result returned JSON and has an
 	# error element, use that
 	my $result = undef;
-	if ($self->{_last_result}->content &&
-	    ($self->{_last_result}->content =~ /^---/)) {
-		eval { $result = YAML::Syck::Load($self->{_last_result}->content); };
+	if ($self->{_last_result}->content) {
+		eval { $result = JSON::Any->Load($self->{_last_result}->content); };
 		if ($result &&
 		    ref($result) eq 'HASH' &&
 		    exists($result->{error}) &&
@@ -108,6 +128,9 @@ sub login ## no critic ( ProhibitBuiltinHomonyms )
 	# Should give us a cookie
 	$self->{_last_result} = $self->POST_request( 'login', { user => $user, password => $password } );
 
+	if (HTTP::Status::is_success($self->{_last_result}->code)) {
+		$self->{logged_in} = 1;
+	}
 	return HTTP::Status::is_success($self->{_last_result}->code);
 }
 
@@ -145,22 +168,58 @@ sub set_canit_cookie
 	$self->{ua}->cookie_jar()->set_cookie($version, $key, $val, $path, $domain, $port, $path_spec, $secure, $expires, $discard, undef);
 }
 
+sub get_raw_canit_cookie
+{
+	my ($self) = @_;
+	my $str = '';
+	$self->{ua}->cookie_jar()->scan(sub {
+		if ($_[1] eq 'CANIT') {
+			$str = ($_[2] || '');
+		}
+					});
+	return $str;
+}
+
 sub logout
 {
 	my ($self) = @_;
 	$self->{_last_result} = $self->POST_request( 'logout', { } );
 
+	$self->{logged_in} = 0;
+
 	return HTTP::Status::is_success($self->{_last_result}->code);
+}
+
+sub DESTROY
+{
+	my ($self) = @_;
+	if ($self->{autologout} && $self->{logged_in}) {
+		eval {
+			$self->logout();
+		};
+	}
 }
 
 sub do_get
 {
-	my ($self, $partial_uri) = @_;
-	my $result = $self->GET_request($partial_uri);
+	my ($self, $partial_uri, $content_ref) = @_;
+	my $result = $self->GET_request($partial_uri, $content_ref);
 	if (!HTTP::Status::is_success($result->code)) {
 		return undef;
 	}
-	return YAML::Syck::Load($result->content);
+
+	# Handle message/rfc822 responses from archiver specially!
+	if (lc($result->header('Content-Type') eq 'message/rfc822')) {
+		return { message => $result->content };
+	}
+
+	my $ans;
+	eval { $ans = JSON::Any->Load($result->content) };
+	if ($@) {
+		$self->{_last_result} = HTTP::Response->new(600, "Could not parse JSON: $@: " . $result->content);
+		return undef;
+	}
+	return $ans;
 }
 
 sub GET_request
@@ -238,7 +297,7 @@ sub PUT_request
 
 	my $uri = $self->_mk_uri_object( $partial_uri );
 
-	my $content = YAML::Syck::Dump( $content_ref );
+	my $content = JSON::Any->Dump( $content_ref );
 	my %headers;
 	if( defined $header_ref ) {
 		%headers = %{ $header_ref };
@@ -246,7 +305,7 @@ sub PUT_request
 
 	my $req = HTTP::Request::Common::PUT($uri,
 		%headers,
-		'Content-type' => 'text/x-yaml',
+		'Content-type' => 'application/json',
 		'Content-length' => length $content,
 		Content => $content
 	);
@@ -304,10 +363,15 @@ This method constructs a new C<CanIt::API::Client> object and returns it.
 A hashref containing key-value pair arguments should be provided to set
 the initial state.  The following are the available keys:
 
-   KEY            USAGE                     DEFAULT
-   ------------   -----------------------   --------------------
-   base           Base URI for API server   undef
-   version        Version of API to use     undef
+   KEY            USAGE                             DEFAULT
+   ------------   -----------------------           -------
+   base           Base URI for API server           undef
+   version        Version of API to use             undef
+   autologout     Log out when we go out of scope   1
+
+Normally, when a CanIt::API::Client object goes out of scope, the
+perl DESTROY method destroys the session by calling logout().  If you do
+not want this to happen, use autologout => 0 in the new({}) call.
 
 =head1 INSTANCE METHODS
 
@@ -326,12 +390,15 @@ destroys the client session.
 
 Should be invoked as the last action when done with API commands.
 
-=head2 do_get ( $uri_fragment )
+=head2 do_get ( $uri_fragment, $content_ref )
 
 Perform a GET with the given URI fragment.  If an error occurs,
 returns undef.  Otherwise, returns a Perl data structure (either
 an array of hashes or a single hash, depending on the query) containing
 the data returned by the API server.
+
+If $content_ref is supplied, it should be a reference to a hash.
+The hash is URL-encoded and appended to the URL as a query string.
 
 =head2 do_delete ( $uri_fragment )
 
@@ -411,8 +478,8 @@ Perform a PUT to the object at the given URI fragment on the API
 server.
 
 $content_ref is a reference to the content to be sent as the PUT body.
-It will be automatically serialized as YAML and submitted under the
-C<text/x-yaml> content-type.
+It will be automatically serialized as JSON and submitted under the
+C<application/json> content-type.
 
 $header_ref is an optional hash reference containing key-value pairs to
 be used as additional HTTP headers.
@@ -426,6 +493,12 @@ DELETE operation.  Returns undef if there was no operation performed yet.
 
 See the HTTP::Response documentation for details about methods you can
 call on the result.
+
+=head2 get_last_value ( )
+
+Returns the Perl data structure that was deserialized from the result
+of the most recent GET, PUT or POST operation.  Do not call this method
+unless the most recent do_get, do_put or do_post operation returned success.
 
 =head2 get_last_error ( )
 
@@ -452,12 +525,24 @@ Set the API version
 
 Returns a string that is suitable for use in a set_canit_cookie call.
 Note that get_canit_cookie only returns a meaningful result afer
-$api->login() has been called.
+a successful call to $api->login().
 
 =head2 set_canit_cookie ( $str )
 
 Given a string returned by get_canit_cookie(), set the cookie.  This
 eliminates the need to call login() (assuming the cookie is still valid.)
+
+=head2 get_raw_canit_cookie ( )
+
+Returns a string that contains only the cookie value.  This string may
+not be used by set_canit_cookie, but can be passed to other software
+to continue using the session.  The other software should simply pass
+a cookie called CANIT with the value returned by get_raw_canit_cookie()
+to the CanIt server.  You most likely want to construct your $api object
+with autologout set to 0 in this case.
+
+Note that get_raw_canit_cookie only returns a meaningful result after
+a successful call to $api->login().
 
 =head1 DEPENDENCIES
 
@@ -466,7 +551,7 @@ L< HTTP::Response >
 L< HTTP::Status >
 L< LWP::UserAgent >
 L< URI >
-L< YAML::Syck >
+L< JSON::Any >
 
 =head1 INCOMPATIBILITIES
 

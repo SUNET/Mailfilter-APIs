@@ -87,6 +87,7 @@ class CanItAPIClient {
 	$this->curl_response = '';
 	$this->curl_content = '';
 	$this->curl_headers = '';
+	$this->curl_content_type = '';
 	$this->cookie = '';
     }
 
@@ -130,7 +131,12 @@ class CanItAPIClient {
 
 	# Set our cookie
 	foreach ($this->curl_headers as $header) {
-	    list($name, $val) = explode(':', $header, 2);
+	    if (strpos($header, ':') !== FALSE) {
+		list($name, $val) = explode(':', $header, 2);
+	    } else {
+		$name = $header;
+		$val = '';
+	    }
 	    $name = strtolower(trim($name));
 	    $val = trim($val);
 	    if ($name == 'set-cookie') {
@@ -156,13 +162,26 @@ class CanItAPIClient {
      * @param string $rel_url The relative URL.  That is everything
      *                        AFTER the /canit/api/2.0/ part of the full
      *                        URL.
+     * @param array $params   Search array converted to ?key1=val1&key2=val2...
      * @return NULL on failure, a PHP data structure on success.
      */
-    function do_get ($rel_url) {
+    function do_get ($rel_url, $params = null) {
 	# If $rel_url begins with a slash, remove it
 	$rel_url = ltrim($rel_url, '/');
 
 	$full_url = $this->url . $rel_url;
+	if (is_array($params)) {
+	    $first_time = 1;
+	    foreach ($params as $key => $val) {
+		if ($first_time) {
+		    $full_url .= '?';
+		    $first_time = 0;
+		} else {
+		    $full_url .= '&';
+		}
+		$full_url .= urlencode($key) . '=' . urlencode($val);
+	    }
+	}
 	$ch = curl_init();
 	$this->curl_call($full_url, $ch);
 	curl_close($ch);
@@ -259,6 +278,7 @@ class CanItAPIClient {
 	    $this->curl_content = $arr[1];
 	    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 	    if ($code >= 200 && $code <= 299) {
+		$this->curl_content_type = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
 		$this->is_error = 0;
 		$this->last_error = '';
 	    } elseif ($code >= 400 && $code <= 599) {
@@ -290,6 +310,10 @@ class CanItAPIClient {
 
     function deserialize_curl_data () {
 	if ($this->is_error) return NULL;
+	if ($this->curl_content_type == 'message/rfc822') {
+	    return array('message' => $this->curl_content);
+	}
+
 	return json_decode($this->curl_content, true);
     }
 

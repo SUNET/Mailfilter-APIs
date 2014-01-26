@@ -74,6 +74,7 @@ class CanItAPIClient:
         self.last_error = ''
         self.curl_response = ''
         self.curl_content = ''
+        self.curl_content_type = ''
         self.curl_headers = ''
         self.cookie = ''
         pycurl.global_init(pycurl.GLOBAL_ALL)
@@ -109,11 +110,16 @@ class CanItAPIClient:
         self.cookie = ''
         return True
 
-    def do_get(self, rel_url):
+    def do_get(self, rel_url, params=None):
         """Do a GET request against the API server."""
 	# If rel_url begins with a slash, remove it
         rel_url = rel_url.lstrip('/')
         full_url = self.url + rel_url
+
+        # Add params
+        if type(params) is dict:
+            full_url += '?' + urllib.urlencode(params)
+
         c = pycurl.Curl()
         self.curl_call(full_url, c)
         c.close()
@@ -200,6 +206,7 @@ class CanItAPIClient:
         if code >= 200 and code <= 299:
             self.is_error = 0
             self.last_error = ''
+            self.curl_content_type = c.getinfo(pycurl.CONTENT_TYPE)
         elif code >= 400 and code <= 599:
             self.is_error = 1
             self.set_error_from_result(self.curl_content, code)
@@ -238,6 +245,9 @@ class CanItAPIClient:
     def deserialize_curl_data(self):
         if (self.curl_content == ''):
             return None
+
+        if (self.curl_content_type == 'message/rfc822'):
+            return {'message' : self.curl_content}
 
         if (self.is_error):
             return None
