@@ -4,7 +4,7 @@ use warnings;
 use Carp;
 
 use vars qw( $VERSION );
-$VERSION = '9.0.14';
+$VERSION = '9.2.10';
 
 use JSON::Any;
 use HTTP::Request::Common ( );
