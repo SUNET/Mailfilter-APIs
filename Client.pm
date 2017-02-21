@@ -4,7 +4,7 @@ use warnings;
 use Carp;
 
 use vars qw( $VERSION );
-$VERSION = '9.2.10';
+$VERSION = '10.1.1';
 
 use JSON::Any;
 use HTTP::Request::Common ( );
@@ -24,9 +24,17 @@ sub new
 	my $self = bless {%$args}, $class; ## no critic (ProhibitDoubleSigils)
 
 	if( $self->{version} ) {
+		# Remove trailing slashes from base
+		$self->{base} =~ s|/+$||;
+
 		# Append version to base URI
 		$self->{base} = join(q{/}, $self->{base}, $self->{version});
-		$self->{base} .= q{/};
+
+		# Make sure it DOES NOT end with a slash
+		$self->{base} =~ s|/+$||;
+	} else {
+		# Remove trailing slashes from base
+		$self->{base} =~ s|/+$||;
 	}
 
 	if (! exists($self->{autologout})) {
@@ -40,7 +48,7 @@ sub new
 	);
 
 	$self->{ua}->default_headers()->header('Accept', 'application/json');
-	$self->{ua}->timeout(300);
+	$self->{ua}->timeout(3600);
 
 	$self->{logged_in} = 0;
 	return $self;
@@ -166,6 +174,7 @@ sub set_canit_cookie
 	$expires = undef if defined($expires) && $expires eq '';
 	$discard = undef if defined($discard) && $discard eq '';
 	$self->{ua}->cookie_jar()->set_cookie($version, $key, $val, $path, $domain, $port, $path_spec, $secure, $expires, $discard, undef);
+	$self->{logged_in} = 1;
 }
 
 sub get_raw_canit_cookie
@@ -183,6 +192,8 @@ sub get_raw_canit_cookie
 sub logout
 {
 	my ($self) = @_;
+	return 1 unless $self->{logged_in};
+
 	$self->{_last_result} = $self->POST_request( 'logout', { } );
 
 	$self->{logged_in} = 0;
@@ -546,12 +557,12 @@ a successful call to $api->login().
 
 =head1 DEPENDENCIES
 
-L< HTTP::Request >
-L< HTTP::Response >
-L< HTTP::Status >
-L< LWP::UserAgent >
-L< URI >
-L< JSON::Any >
+L<HTTP::Request>
+L<HTTP::Response>
+L<HTTP::Status>
+L<LWP::UserAgent>
+L<URI>
+L<JSON::Any>
 
 =head1 INCOMPATIBILITIES
 
