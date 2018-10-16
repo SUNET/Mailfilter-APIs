@@ -1,7 +1,15 @@
 import pycurl
 import json
-import urllib
-import StringIO
+import six
+from six.moves import urllib
+try:
+    # Python 3
+    from io import BytesIO
+except ImportError:
+    # Python 2
+    from StringIO import StringIO as BytesIO
+
+
 
 # Python API client library.  Simple wrapper around curl functions
 #
@@ -65,6 +73,7 @@ import StringIO
 
 class CanItAPIClient:
     """A simple client-side library for accessing the CanIt API"""
+
     def __init__(self, url):
         # Remove trailing slashes from url
         url = url.rstrip('/')
@@ -93,6 +102,8 @@ class CanItAPIClient:
         if self.is_error:
             return False
         for header in self.curl_headers:
+            if six.PY3:
+                header = header.decode('ascii')
             lst = header.split(':', 2)
             if len(lst) < 2:
                 continue
@@ -107,18 +118,18 @@ class CanItAPIClient:
     def logout(self):
         """Log out of the API and release cookie."""
         self.do_get('logout')
-        self.cookie = ''
+        self.cookie = b''
         return True
 
     def do_get(self, rel_url, params=None):
         """Do a GET request against the API server."""
-	# If rel_url begins with a slash, remove it
+        # If rel_url begins with a slash, remove it
         rel_url = rel_url.lstrip('/')
         full_url = self.url + rel_url
 
         # Add params
         if type(params) is dict:
-            full_url += '?' + urllib.urlencode(params)
+            full_url += b'?' + urllib.parse.urlencode(params)
 
         c = pycurl.Curl()
         self.curl_call(full_url, c)
@@ -128,7 +139,7 @@ class CanItAPIClient:
     def do_put(self, rel_url, put_data):
         """Do a PUT request against the API server.  put_data should
         be a dictionary."""
-	# If rel_url begins with a slash, remove it
+        # If rel_url begins with a slash, remove it
         rel_url = rel_url.lstrip('/')
         full_url = self.url + rel_url
         c = pycurl.Curl()
@@ -148,10 +159,9 @@ class CanItAPIClient:
         c.close()
         return self.deserialize_curl_data()
 
-
     def do_delete(self, rel_url):
         """Do a DELETE request against the API server."""
-	# If rel_url begins with a slash, remove it
+        # If rel_url begins with a slash, remove it
         rel_url = rel_url.lstrip('/')
         full_url = self.url + rel_url
         c = pycurl.Curl()
@@ -163,33 +173,33 @@ class CanItAPIClient:
     def do_post(self, rel_url, post_data):
         """Do a POST request against the API server.  post_data should
         be a dictionary."""
-	# If rel_url begins with a slash, remove it
+        # If rel_url begins with a slash, remove it
         rel_url = rel_url.lstrip('/')
         full_url = self.url + rel_url
         c = pycurl.Curl()
         c.setopt(pycurl.POST, True)
-        c.setopt(pycurl.POSTFIELDS, urllib.urlencode(post_data))
+        c.setopt(pycurl.POSTFIELDS, urllib.parse.urlencode(post_data))
         self.curl_call(full_url, c)
         c.close()
         return self.deserialize_curl_data()
 
-#==== END OF PUBLIC FUNCTIONS.  REMAINING FUNCTIONS ARE PRIVATE;
-#==== DO NOT CALL THEM DIRECTLY
+    # ==== END OF PUBLIC FUNCTIONS.  REMAINING FUNCTIONS ARE PRIVATE;
+    # ==== DO NOT CALL THEM DIRECTLY
 
     def curl_call(self, url, c):
-        c.setopt(pycurl.URL, url);
-        c.setopt(pycurl.FOLLOWLOCATION, 1);
-        c.setopt(pycurl.CONNECTTIMEOUT, 10);
-        c.setopt(pycurl.MAXREDIRS, 5);
-        c.setopt(pycurl.TIMEOUT, 30);
-        c.setopt(pycurl.HEADER, 1);
+        c.setopt(pycurl.URL, url)
+        c.setopt(pycurl.FOLLOWLOCATION, 1)
+        c.setopt(pycurl.CONNECTTIMEOUT, 10)
+        c.setopt(pycurl.MAXREDIRS, 5)
+        c.setopt(pycurl.TIMEOUT, 30)
+        c.setopt(pycurl.HEADER, 1)
         c.setopt(pycurl.FORBID_REUSE, 1)
 
-	if (self.cookie != ''):
+        if self.cookie != '':
             c.setopt(pycurl.COOKIE, self.cookie)
 
-	c.setopt(pycurl.HTTPHEADER, ['Expect:', 'Accept: application/json'])
-        ans = StringIO.StringIO()
+        c.setopt(pycurl.HTTPHEADER, ['Expect:', 'Accept: application/json'])
+        ans = BytesIO()
         c.setopt(pycurl.WRITEFUNCTION, ans.write)
         try:
             c.perform()
@@ -197,9 +207,8 @@ class CanItAPIClient:
             self.is_error = 1
             self.last_error = c.errstr()
             return None
-
-        lst = ans.getvalue().split("\r\n\r\n", 3)
-        self.curl_headers = lst[0].split("\r\n")
+        lst = ans.getvalue().split(b"\r\n\r\n", 3)
+        self.curl_headers = lst[0].split(b"\r\n")
         self.curl_content = lst[1]
 
         code = c.getinfo(pycurl.HTTP_CODE)
@@ -214,10 +223,9 @@ class CanItAPIClient:
             self.is_error = 1
             self.last_error = 'Unknown HTTP response ' + str(code)
 
-
     def set_error_from_result(self, result, code):
         code = str(code)
-        if (result == ''):
+        if result == '':
             self.last_error = 'Unknown error: HTTP Code ' + code
             return
         try:
@@ -236,20 +244,20 @@ class CanItAPIClient:
             self.last_error = 'Unknown error: HTTP Code ' + code
             return
 
-        if data.has_key('error'):
+        if 'error' in data.keys():
             self.last_error = data['error']
             return
 
         self.last_error = 'Unknown error: HTTP Code ' + code
 
     def deserialize_curl_data(self):
-        if (self.curl_content == ''):
+        if self.curl_content == b'':
             return None
 
-        if (self.curl_content_type == 'message/rfc822'):
-            return {'message' : self.curl_content}
+        if self.curl_content_type == 'message/rfc822':
+            return {'message': self.curl_content}
 
-        if (self.is_error):
+        if self.is_error:
             return None
 
         try:
