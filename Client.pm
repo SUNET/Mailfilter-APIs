@@ -4,7 +4,7 @@ use warnings;
 use Carp;
 
 use vars qw( $VERSION );
-$VERSION = '10.1.1';
+$VERSION = '10.2.5';
 
 use JSON::Any;
 use HTTP::Request::Common ( );
@@ -159,7 +159,7 @@ sub get_canit_cookie
 				($_[7] || '') . ',' .
 				($_[8] || '') . ',' .
 				($_[9] || '') . ',' .
-				($_[19] || ''));
+				($_[10] || ''));
 		}
 				     });
 	return $str;
